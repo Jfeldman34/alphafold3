@@ -1548,6 +1548,16 @@ def get_reference(
           for date in ccd_cif['_chem_comp.pdbx_modified_date']
       ]
       max_modified_date = max(modified_dates)
+      if ref_max_modified_date == None:
+        ref_max_modified_date = max_modified_date
+      else if max_modified_date == None: 
+        max_modified_date = ref_max_modified_date
+      else if ref_max_modified_date == None and  max_modified_date == None:
+        atom_x = ccd_cif['_chem_comp_atom.model_Cartn_x']
+        atom_y = ccd_cif['_chem_comp_atom.model_Cartn_y']
+        atom_z = ccd_cif['_chem_comp_atom.model_Cartn_z']
+        pos = np.array([[x, y, z] for x, y, z in zip(atom_x, atom_y, atom_z)])
+      
       if max_modified_date < ref_max_modified_date:
         atom_x = ccd_cif['_chem_comp_atom.model_Cartn_x']
         atom_y = ccd_cif['_chem_comp_atom.model_Cartn_y']

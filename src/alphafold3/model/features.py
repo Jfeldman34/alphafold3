@@ -426,7 +426,9 @@ class MSA:
     )
     prot = substruct.filter_to_entity_type(protein=True)
     num_unique_chains = len(set(prot.chain_single_letter_sequence().values()))
-    need_msa_pairing = num_unique_chains > 1
+    #need_msa_pairing = num_unique_chains > 1
+    #This will make it so that MSA pairing is never undertaken
+    need_msa_pairing = False
 
     np_chains_list = []
     input_chains_by_id = {chain.id: chain for chain in fold_input.chains}
@@ -474,7 +476,8 @@ class MSA:
         unpaired_a3m = ''
         paired_a3m = ''
         if not skip_chain:
-          if need_msa_pairing and isinstance(chain, folding_input.ProteinChain):
+          #Modification: this has been changed so that the paired_a3m will be taken from the chain regardless. This will yield an empty paired_msa
+          if isinstance(chain, folding_input.ProteinChain):
             paired_a3m = chain.paired_msa
           if isinstance(
               chain, folding_input.RnaChain | folding_input.ProteinChain
@@ -486,13 +489,14 @@ class MSA:
             a3m=unpaired_a3m,
             deduplicate=True,
         )
+        
+        #Modification: This has been changed so that a paired MSA is not used in this scenario. 
 
-        paired_msa = msa_module.Msa.from_a3m(
-            query_sequence=sequence,
+        paired_msa = msa_module.Msa.from_empty(
+            query_sequence='-' * len(sequence),
             chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-            a3m=paired_a3m,
-            deduplicate=False,
         )
+        
       else:
         unpaired_msa = msa_module.Msa.from_empty(
             query_sequence='-' * len(sequence),
@@ -504,14 +508,14 @@ class MSA:
         )
 
       msa_features = unpaired_msa.featurize()
-      all_seqs_msa_features = paired_msa.featurize()
+      ##all_seqs_msa_features = paired_msa.featurize()
 
       msa_features = data3.fix_features(msa_features)
-      all_seqs_msa_features = data3.fix_features(all_seqs_msa_features)
+      ##all_seqs_msa_features = data3.fix_features(all_seqs_msa_features)
 
-      msa_features = msa_features | {
+      '''msa_features = msa_features | {
           f'{k}_all_seq': v for k, v in all_seqs_msa_features.items()
-      }
+      }'''
       feats = msa_features
       feats['chain_id'] = b_chain_id
       feats['asym_id'] = np.full(chain_num_tokens, asym_id)
@@ -525,7 +529,7 @@ class MSA:
       )
 
     # Allow 50% of the MSA to come from MSA pairing.
-    max_paired_sequences = padding_shapes.msa_size // 2
+    '''max_paired_sequences = padding_shapes.msa_size // 2
     if need_msa_pairing:
       np_chains_list = list(map(dict, np_chains_list))
       np_chains_list = msa_pairing.create_paired_features(
@@ -536,17 +540,17 @@ class MSA:
       )
       np_chains_list = msa_pairing.deduplicate_unpaired_sequences(
           np_chains_list
-      )
+      )'''
 
     # Remove all gapped rows from all seqs.
     nonempty_asym_ids = []
     for chain in np_chains_list:
       if chain['chain_id'] in nonempty_chain_ids:
         nonempty_asym_ids.append(chain['asym_id'][0])
-    if 'msa_all_seq' in np_chains_list[0]:
+    '''if 'msa_all_seq' in np_chains_list[0]:
       np_chains_list = msa_pairing.remove_all_gapped_rows_from_all_seqs(
           np_chains_list, asym_ids=nonempty_asym_ids
-      )
+      )'''
 
     # Crop MSA rows.
     cropped_chains_list = []
@@ -554,7 +558,7 @@ class MSA:
       unpaired_msa_size, paired_msa_size = (
           msa_pairing.choose_paired_unpaired_msa_crop_sizes(
               unpaired_msa=chain['msa'],
-              paired_msa=chain.get('msa_all_seq'),
+              paired_msa=None,
               total_msa_crop_size=padding_shapes.msa_size,
               max_paired_sequences=max_paired_sequences,
           )
@@ -568,10 +572,10 @@ class MSA:
       for feat in data_constants.NUM_SEQ_NUM_RES_MSA_FEATURES:
         if feat in chain:
           cropped_chain[feat] = chain[feat][:unpaired_msa_size]
-        if feat + '_all_seq' in chain:
+        '''if feat + '_all_seq' in chain:
           cropped_chain[feat + '_all_seq'] = chain[feat + '_all_seq'][
               :paired_msa_size
-          ]
+          ]'''
       cropped_chains_list.append(cropped_chain)
 
     # Merge Chains.
@@ -585,7 +589,8 @@ class MSA:
         ),
     }
     for feature in data_constants.NUM_SEQ_NUM_RES_MSA_FEATURES:
-      for feat in [feature, feature + '_all_seq']:
+      #for feat in [feature, feature + '_all_seq']:
+      for feat in [feature]:
         if feat in cropped_chains_list[0]:
           np_example[feat] = merging_features.merge_msa_features(
               feat, cropped_chains_list
@@ -601,15 +606,15 @@ class MSA:
         if chain['asym_id'][0] in nonempty_asym_ids
     ])
     np_example['msa'] = np_example['msa'][:max_allowed_unpaired]
-    if 'msa_all_seq' in np_example:
+    '''if 'msa_all_seq' in np_example:
       max_allowed_paired = max([
           len(chain['msa_all_seq'])
           for chain in cropped_chains_list
           if chain['asym_id'][0] in nonempty_asym_ids
       ])
-      np_example['msa_all_seq'] = np_example['msa_all_seq'][:max_allowed_paired]
+      np_example['msa_all_seq'] = np_example['msa_all_seq'][:max_allowed_paired]'''
 
-    np_example = merging_features.merge_paired_and_unpaired_msa(np_example)
+    '''np_example = merging_features.merge_paired_and_unpaired_msa(np_example)'''
 
     # Crop MSA residues. Need to use the standard token indices, since msa does
     # not expand non-standard residues. This means that for expanded residues,

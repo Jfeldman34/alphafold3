@@ -10,6 +10,8 @@
 
 """Model input dataclass."""
 
+from typing import Final, Sequence, Any, Mapping
+from dataclasses import dataclass
 from collections.abc import Collection, Mapping, Sequence
 import dataclasses
 import json
@@ -107,14 +109,15 @@ class ProteinChain:
   id: str
   sequence: str
   ptms: Sequence[tuple[str, int]]
-  paired_msa: str | None = None
+  #Modification: The unpaired_msa has been changed to an empty string to signal to the program that it should be skipped. 
+  paired_msa: Final[str] = ""
   unpaired_msa: str | None = None
   templates: Sequence[Template] | None = None
 
   def __post_init__(self):
     if not all(res.isalpha() for res in self.sequence):
       raise ValueError(
-          f'Protein must contain only letters, got "{self.sequence}"'
+          f'Protein must contain only digits, got "{self.sequence}"'
       )
     if any(not 0 < mod[1] <= len(self.sequence) for mod in self.ptms):
       raise ValueError(f'Invalid protein modification index: {self.ptms}')
@@ -194,7 +197,6 @@ class ProteinChain:
         id=seq_id or json_dict['id'],
         sequence=sequence,
         ptms=ptms,
-        paired_msa=paired_msa,
         unpaired_msa=unpaired_msa,
         templates=templates,
     )
@@ -269,7 +271,7 @@ class RnaChain:
 
   def __post_init__(self):
     if not all(res.isalpha() for res in self.sequence):
-      raise ValueError(f'RNA must contain only letters, got "{self.sequence}"')
+      raise ValueError(f'RNA must contain only digits, got "{self.sequence}"')
     if any(not 0 < mod[1] <= len(self.sequence) for mod in self.modifications):
       raise ValueError(f'Invalid RNA modification index: {self.modifications}')
 
@@ -356,7 +358,7 @@ class DnaChain:
 
   def __post_init__(self):
     if not all(res.isalpha() for res in self.sequence):
-      raise ValueError(f'DNA must contain only letters, got "{self.sequence}"')
+      raise ValueError(f'DNA must contain only digits, got "{self.sequence}"')
     if any(not 0 < mod[1] <= len(self.sequence) for mod in self.modifications):
       raise ValueError(f'Invalid DNA modification index: {self.modifications}')
 
@@ -540,7 +542,9 @@ class Input:
 
     chain_ids = [c.id for c in self.chains]
     if any(not c.id.isalpha() or c.id.islower() for c in self.chains):
-      raise ValueError(f'IDs must be upper case letters, got: {chain_ids}')
+      raise ValueError(
+          f'IDs must be alphanumeric and upper case, got: {chain_ids}'
+      )
     if len(set(chain_ids)) != len(chain_ids):
       raise ValueError('Input JSON contains sequences with duplicate IDs.')
 
@@ -806,12 +810,11 @@ class Input:
 
     struc = structure.from_mmcif(
         mmcif_str,
-        fix_mse_residues=True,
-        fix_arginines=True,
-        fix_unknown_dna=True,
         include_water=False,
-        include_other=False,
+        fix_mse_residues=True,
+        fix_unknown_dna=True,
         include_bonds=True,
+        include_other=False,
     )
 
     # Create default bioassembly, expanding structures implied by stoichiometry.
@@ -877,12 +880,10 @@ class Input:
           )
 
     bonded_atom_pairs = []
-    chain_ids = set(c.id for c in chains)
     for atom_a, atom_b, _ in struc.iter_bonds():
-      if atom_a['chain_id'] in chain_ids and atom_b['chain_id'] in chain_ids:
-        beg = (atom_a['chain_id'], int(atom_a['res_id']), atom_a['atom_name'])
-        end = (atom_b['chain_id'], int(atom_b['res_id']), atom_b['atom_name'])
-        bonded_atom_pairs.append((beg, end))
+      beg = (atom_a['chain_id'], int(atom_a['res_id']), atom_a['atom_name'])
+      end = (atom_b['chain_id'], int(atom_b['res_id']), atom_b['atom_name'])
+      bonded_atom_pairs.append((beg, end))
 
     return cls(
         name=struc.name,

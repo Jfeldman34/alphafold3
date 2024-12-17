@@ -66,7 +66,89 @@ def _get_protein_templates(
 
 
 # Cache to avoid re-running the MSA tools for the same sequence in homomers.
+
+#Modification: the _get_protein_msa_and_templates_unpaired_only method has been added to create only unpaired MSAs.  
+
 @functools.cache
+def _get_protein_msa_and_templates_unpaired_only(
+    sequence: str,
+    run_template_search: bool,
+    uniref90_msa_config: msa_config.RunConfig,
+    mgnify_msa_config: msa_config.RunConfig,
+    small_bfd_msa_config: msa_config.RunConfig,
+    uniprot_msa_config: msa_config.RunConfig,
+    templates_config: msa_config.TemplatesConfig,
+    pdb_database_path: str,
+) -> tuple[msa.Msa, msa.Msa, templates_lib.Templates]:
+  """Processes a single protein chain."""
+  logging.info("Processing unpaired MSAs only")
+  logging.info('Getting protein MSAs for sequence %s', sequence)
+  msa_start_time = time.time()
+  # Run various MSA tools in parallel. Use a ThreadPoolExecutor because
+  # they're not blocked by the GIL, as they're sub-shelled out.
+  
+  with futures.ThreadPoolExecutor(max_workers=4) as executor:
+    uniref90_msa_future = executor.submit(
+        msa.get_msa,
+        target_sequence=sequence,
+        run_config=uniref90_msa_config,
+        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+    )
+    mgnify_msa_future = executor.submit(
+        msa.get_msa,
+        target_sequence=sequence,
+        run_config=mgnify_msa_config,
+        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+    )
+    small_bfd_msa_future = executor.submit(
+        msa.get_msa,
+        target_sequence=sequence,
+        run_config=small_bfd_msa_config,
+        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+    )
+    uniprot_msa_future = executor.submit(
+        msa.get_msa,
+        target_sequence=sequence,
+        run_config=uniprot_msa_config,
+        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+    )
+  uniref90_msa = uniref90_msa_future.result()
+  mgnify_msa = mgnify_msa_future.result()
+  small_bfd_msa = small_bfd_msa_future.result()
+  uniprot_msa = uniprot_msa_future.result()
+  logging.info(
+      'Getting protein MSAs took %.2f seconds for sequence %s',
+      time.time() - msa_start_time,
+      sequence,
+  )
+
+  logging.info('Deduplicating MSAs for sequence %s', sequence)
+  msa_dedupe_start_time = time.time()
+  with futures.ThreadPoolExecutor() as executor:
+    unpaired_protein_msa_future = executor.submit(
+        msa.Msa.from_multiple_msas,
+        msas=[uniref90_msa, small_bfd_msa, mgnify_msa, uniprot_msa],
+        deduplicate=True,
+    )
+  unpaired_protein_msa = unpaired_protein_msa_future.result()
+  paired_protein_msa = ""
+  logging.info(
+      'Deduplicating MSAs took %.2f seconds for sequence %s',
+      time.time() - msa_dedupe_start_time,
+      sequence,
+  )
+
+  protein_templates = _get_protein_templates(
+      sequence=sequence,
+      input_msa_a3m=unpaired_protein_msa.to_a3m(),
+      run_template_search=run_template_search,
+      templates_config=templates_config,
+      pdb_database_path=pdb_database_path,
+  )
+
+  return unpaired_protein_msa, paired_protein_msa, protein_templates
+
+'''@functools.cache
 def _get_protein_msa_and_templates(
     sequence: str,
     run_template_search: bool,
@@ -144,7 +226,7 @@ def _get_protein_msa_and_templates(
       pdb_database_path=pdb_database_path,
   )
 
-  return unpaired_protein_msa, paired_protein_msa, protein_templates
+  return unpaired_protein_msa, paired_protein_msa, protein_templates'''
 
 
 # Cache to avoid re-running the Nhmmer for the same sequence in homomers.
@@ -386,7 +468,7 @@ class DataPipeline:
                 filter_f1=0.1,
                 filter_f2=0.1,
                 filter_f3=0.1,
-                e_value=100,
+                e_value=100, 
                 inc_e=100,
                 dom_e=100,
                 incdom_e=100,
@@ -411,10 +493,12 @@ class DataPipeline:
     has_unpaired_msa = chain.unpaired_msa is not None
     has_paired_msa = chain.paired_msa is not None
     has_templates = chain.templates is not None
-
-    if not has_unpaired_msa and not has_paired_msa and not chain.templates:
+    
+    #Modification: An additional statement has been added that accesses a version of the _get_protein_msa_and_templates function that does not return paired MSAs
+    
+    if (not has_unpaired_msa and has_paired_msa and not chain.templates) or (not has_unpaired_msa and not has_paired_msa and not chain.templates):
       # MSA None - search. Templates either [] - don't search, or None - search.
-      unpaired_msa, paired_msa, template_hits = _get_protein_msa_and_templates(
+      unpaired_msa, _, template_hits = _get_protein_msa_and_templates_unpaired_only(
           sequence=chain.sequence,
           run_template_search=not has_templates,  # Skip template search if [].
           uniref90_msa_config=self._uniref90_msa_config,
@@ -425,7 +509,14 @@ class DataPipeline:
           pdb_database_path=self._pdb_database_path,
       )
       unpaired_msa = unpaired_msa.to_a3m()
-      paired_msa = paired_msa.to_a3m()
+      empty_msa = msa.Msa.from_empty(
+          query_sequence=chain.sequence,
+          chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+      ).to_a3m()
+      paired_msa = empty_msa
+      logging.info('Using empty paired MSA for protein chain %s', chain.id)
+      logging.info('Using only unpaired MSAs')
+
       templates = [
           folding_input.Template(
               mmcif=struc.to_mmcif(),
@@ -433,6 +524,7 @@ class DataPipeline:
           )
           for hit, struc in template_hits.get_hits_with_structures()
       ]
+
     elif has_unpaired_msa and has_paired_msa and not has_templates:
       # Has MSA, but doesn't have templates. Search for templates only.
       empty_msa = msa.Msa.from_empty(
